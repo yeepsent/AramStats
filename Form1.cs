@@ -70,9 +70,9 @@ namespace AramStats
         private void BuildInterface()
         {
             Text = "AramStats v" + AppVersion + " - 증바람 전적 분석기";
-            Size = new Size(1100, 750);
+            Size = new Size(1280, 800);
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(850, 550);
+            MinimumSize = new Size(1024, 680);
             Controls.Clear();
 
             mainNavigation = new TabControl { Dock = DockStyle.Fill };
@@ -80,17 +80,22 @@ namespace AramStats
             TabPage managementPage = new TabPage("데이터 관리") { Padding = new Padding(14) };
             dashboardHost = new Panel { Dock = DockStyle.Fill };
             statsPage.Controls.Add(dashboardHost);
-            dashboardHost.Controls.Add(new Label
+            var openData = new Button
             {
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Text = "데이터 관리에서 전적 업데이트를 눌러 시작하세요."
-            });
+                Text = "데이터 관리에서 전적 불러오기",
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
+                Padding = new Padding(14, 6, 14, 6)
+            };
+            openData.Click += (_, _) => mainNavigation.SelectedTab = managementPage;
+            var emptyDashboard = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
+            emptyDashboard.Controls.Add(openData);
+            dashboardHost.Controls.Add(emptyDashboard);
 
             var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, Padding = new Padding(4) };
             content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 138));
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 174));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             content.RowStyles.Add(new RowStyle(SizeType.Absolute, 125));
@@ -108,7 +113,9 @@ namespace AramStats
             quick.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
             quick.RowStyles.Add(new RowStyle(SizeType.Absolute, 29));
             quick.RowStyles.Add(new RowStyle(SizeType.Absolute, 29));
+            quick.RowStyles.Add(new RowStyle(SizeType.Absolute, 29));
             quick.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            quick.RowCount = 4;
             quick.BackColor = Color.FromArgb(242, 246, 251);
             lblAccount = new Label { Text = "계정: 연결되지 않음", Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
             lblCount = new Label { Text = "저장된 경기: 0판", Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -132,6 +139,8 @@ namespace AramStats
             quick.Controls.Add(btnUpdateAll, 1, 0);
             quick.SetRowSpan(btnUpdateAll, 3);
             btnUpdateAll.Click += async (sender, e) => await UpdateAllAsync();
+            quick.Controls.Add(BuildGroupSyncPanel(), 0, 3);
+            quick.SetColumnSpan(quick.GetControlFromPosition(0, 3)!, 2);
             content.Controls.Add(quick, 0, 1);
 
             var advancedToggle = new Button { Text = "▶ 고급 관리 펼치기", Dock = DockStyle.Left, Width = 180 };
@@ -223,7 +232,8 @@ namespace AramStats
             mainNavigation.TabPages.Add(managementPage);
             Controls.Add(mainNavigation);
             InitializeGroupSync();
-            mainNavigation.SelectedTab = managementPage;
+            mainNavigation.SelectedTab = statsPage;
+            ApplyDashboardTheme(this);
         }
 
         // GitHub Releases에서 무설치 EXE를 다운로드한다. 기존 실행 파일은 별도 프로세스에서 교체한다.
@@ -1079,7 +1089,9 @@ try {
             dashboard.Click += (sender, e) => ShowFriendsDashboard();
             dialog.Controls.AddRange(new Control[] { input, add, remove, analyze, dashboard, friendList, output, info });
             RefreshFriends();
+            ApplyDashboardTheme(dialog);
             dialog.ShowDialog(this);
+            OpenEmbeddedDashboard();
         }
 
         // 본인과 등록된 친구의 시즌별 기록을 분석한다. 기존 저장 데이터는 변경하지 않는다.
@@ -1196,14 +1208,14 @@ try {
         private void OpenEmbeddedDashboard()
         {
             if (dashboardHost == null || string.IsNullOrWhiteSpace(activePuuid)) return;
-            ShowFriendsDashboard(null, 1, true);
+            ShowFriendsDashboard(dashboardPersonId, dashboardTab, true);
         }
 
-        private void ShowFriendsDashboard(string initialPerson = null, int initialTab = 1, bool embedded = false)
+        private void ShowFriendsDashboard(string? initialPerson = null, int initialTab = 1, bool embedded = false)
         {
             if (string.IsNullOrWhiteSpace(activePuuid))
             { MessageBox.Show("먼저 계정 정보를 조회해 주세요."); return; }
-            Form dialog = new Form
+            using Form? dialog = embedded ? null : new Form
             {
                 Text = "AramStats - 개인 / 공동 / 챔피언 랭킹",
                 Size = new Size(1180, 800),
@@ -1212,28 +1224,33 @@ try {
             };
             var people = DashboardPeople();
             TabControl tabs = new TabControl { Dock = DockStyle.Fill };
-            TabPage personal = new TabPage("개인 통계");
-            TabPage group = new TabPage("공동 통계");
-            TabPage champions = new TabPage("챔피언 랭킹");
+            TabPage personal = new TabPage("개인 전적");
+            TabPage group = new TabPage("멤버 비교");
+            TabPage champions = new TabPage("챔피언 통계");
             tabs.TabPages.AddRange(new[] { personal, group, champions });
+            var frame = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(12) };
+            frame.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            frame.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var filters = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+            var season = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "시즌" };
+            season.Items.AddRange(new object[] { "시즌 3", "시즌 2", "전체 시즌" });
+            season.SelectedItem = dashboardSeason;
+            filters.Controls.Add(new Label { Text = "시즌", AutoSize = true, Margin = new Padding(4, 7, 8, 4) });
+            filters.Controls.Add(season);
+            frame.Controls.Add(filters, 0, 0);
+            frame.Controls.Add(tabs, 0, 1);
             if (embedded)
             {
-                dashboardHost.Controls.Clear();
-                dashboardHost.Controls.Add(tabs);
+                while (dashboardHost.Controls.Count > 0)
+                    dashboardHost.Controls[0].Dispose();
+                dashboardHost.Controls.Add(frame);
             }
-            else dialog.Controls.Add(tabs);
+            else dialog!.Controls.Add(frame);
 
-            ComboBox MakeSeason()
-            {
-                ComboBox c = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
-                c.Items.AddRange(new object[] { "시즌 3", "시즌 2", "전체 시즌" });
-                c.SelectedIndex = 0;
-                return c;
-            }
             ComboBox MakePerson()
             {
                 ComboBox c = new ComboBox { Width = 250, DropDownStyle = ComboBoxStyle.DropDownList };
-                foreach (var item in people.OrderBy(x => x.Value))
+                foreach (var item in people.OrderByDescending(x => x.Key == activePuuid).ThenBy(x => x.Value))
                     c.Items.Add(new FriendListItem { Puuid = item.Key, RiotId = item.Value });
                 if (c.Items.Count > 0) c.SelectedIndex = 0;
                 return c;
@@ -1253,10 +1270,11 @@ try {
             string Rate(int w, int n) => n == 0 ? "-" : (100.0 * w / n).ToString("F1") + "%";
 
             // 개인 통계: 현재 계정뿐 아니라 공동 탭에서 선택한 친구의 기록도 열 수 있다.
-            ComboBox personalPerson = MakePerson(), personalSeason = MakeSeason();
+            ComboBox personalPerson = MakePerson();
+            personalPerson.AccessibleName = "분석 대상";
             FlowLayoutPanel personalTop = new FlowLayoutPanel();
             personalTop.Controls.AddRange(new Control[] { new Label { Text = "분석 대상", AutoSize = true, Padding = new Padding(0, 7, 0, 0) }, personalPerson,
-                new Label { Text = "시즌", AutoSize = true, Padding = new Padding(8, 7, 0, 0) }, personalSeason });
+                new Label { Text = "챔피언별 상세 기록", AutoSize = true, Padding = new Padding(8, 7, 0, 0) } });
             DataGridView personalGrid = MakeGrid(("Champ", "챔피언"), ("Games", "판수"), ("Wins", "승"),
                 ("Loss", "패"), ("Rate", "승률"), ("KDA", "평균 K / D / A"), ("Score", "보정 점수"));
             Label personalNote = new Label
@@ -1266,12 +1284,31 @@ try {
                 Text = "※ 저장된 경기의 참가자 기록 기준입니다. 증강/아이템은 현재 상세 저장 항목에 없습니다.",
                 Padding = new Padding(12)
             };
-            personal.Controls.Add(personalGrid); personal.Controls.Add(personalNote); AddTop(personal, personalTop);
+            var personalSummary = new Label { AutoSize = true, Padding = new Padding(12, 7, 0, 0) };
+            personalTop.Controls.Add(personalSummary);
+            var recent = MakeGrid(("Date", "날짜"), ("Result", "결과"), ("Champion", "챔피언"), ("Kda", "K / D / A"));
+            var personalViews = new TabControl { Dock = DockStyle.Fill };
+            var recentPage = new TabPage("최근 경기");
+            recentPage.Controls.Add(recent);
+            var picksPage = new TabPage("챔피언별 기록");
+            picksPage.Controls.Add(personalGrid);
+            personalViews.TabPages.AddRange(new[] { recentPage, picksPage });
+            personal.Controls.Add(personalViews); personal.Controls.Add(personalNote); AddTop(personal, personalTop);
             void RefreshPersonal()
             {
                 personalGrid.Rows.Clear();
                 if (!(personalPerson.SelectedItem is FriendListItem person)) return;
-                foreach (ChampionStat st in GetChampionStats(person.Puuid, personalSeason.Text)
+                if (embedded) dashboardPersonId = person.Puuid;
+                var records = GetLocalDashboardMatches(person.Puuid, season.Text);
+                int wins = records.Count(x => x.Win);
+                var favorite = records.GroupBy(x => x.ChampionId).OrderByDescending(x => x.Count())
+                    .ThenBy(x => x.Key).FirstOrDefault();
+                personalSummary.Text = $"저장 경기 {records.Count}판 · 승률 {Rate(wins, records.Count)} · 최다 { (favorite == null ? "—" : ChampionName(favorite.Key))}";
+                recent.Rows.Clear();
+                foreach (var match in records.Take(20))
+                    recent.Rows.Add(match.Date?.ToString("yyyy-MM-dd HH:mm") ?? "—", match.Win ? "승리" : "패배",
+                        ChampionName(match.ChampionId), match.Kda);
+                foreach (ChampionStat st in GetChampionStats(person.Puuid, season.Text)
                     .OrderByDescending(x => x.Games).ThenByDescending(x => x.Rate))
                     personalGrid.Rows.Add(ChampionName(st.ChampionId), st.Games, st.Wins, st.Games - st.Wins,
                         Rate(st.Wins, st.Games),
@@ -1280,24 +1317,46 @@ try {
                         (st.Assists / (double)st.Games).ToString("F1"), st.Score.ToString("F1"));
             }
             personalPerson.SelectedIndexChanged += (s, e) => RefreshPersonal();
-            personalSeason.SelectedIndexChanged += (s, e) => RefreshPersonal();
 
             // 공동 통계: 챔피언별 3판 이상을 TOP3에 집계한다.
-            ComboBox groupSeason = MakeSeason();
             FlowLayoutPanel groupTop = new FlowLayoutPanel();
-            groupTop.Controls.AddRange(new Control[] { new Label { Text = "시즌", AutoSize = true, Padding = new Padding(0, 7, 0, 0) }, groupSeason,
+            groupTop.Controls.AddRange(new Control[] {
                 new Label { Text = "사람 더블클릭: 개인 통계 / 기여도 칸 더블클릭: 경기별 순위 / TOP3: 3판 이상",
                     AutoSize = true, Padding = new Padding(15, 7, 0, 0) } });
-            DataGridView groupGrid = MakeGrid(("Name", "플레이어"), ("Games", "확인된 경기"),
+            DataGridView groupGrid = MakeGrid(("Name", "플레이어"), ("Games", "확인된 경기"), ("WinRate", "승률"),
                 ("Favorite", "최애픽 TOP 3 (판수)"), ("Best", "베스트픽 TOP 3 (승률)"),
                 ("Worst", "워스트픽 TOP 3 (승률)"), ("Contribution", "최근 20판 평균 기여도 순위"));
             group.Controls.Add(groupGrid); AddTop(group, groupTop);
+            var compare = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 45, Padding = new Padding(8) };
+            var first = MakePerson();
+            var second = MakePerson();
+            first.AccessibleName = "기준 멤버";
+            second.AccessibleName = "비교 멤버";
+            if (second.Items.Count > 1) second.SelectedIndex = 1;
+            var comparison = new Label { AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+            compare.Controls.AddRange(new Control[] { first, second, comparison });
+            group.Controls.Add(compare);
+            void RefreshComparison()
+            {
+                if (first.SelectedItem is not FriendListItem left || second.SelectedItem is not FriendListItem right)
+                    return;
+                string Summary(FriendListItem member)
+                {
+                    var stats = GetChampionStats(member.Puuid, season.Text);
+                    int games = stats.Sum(x => x.Games);
+                    return $"{games}판 · {Rate(stats.Sum(x => x.Wins), games)}";
+                }
+                comparison.Text = left.Puuid == right.Puuid ? "서로 다른 멤버를 선택해 주세요."
+                    : Summary(left) + "  /  " + Summary(right);
+            }
+            first.SelectedIndexChanged += (_, _) => RefreshComparison();
+            second.SelectedIndexChanged += (_, _) => RefreshComparison();
             void RefreshGroup()
             {
                 groupGrid.Rows.Clear();
                 foreach (var person in people.OrderBy(x => x.Value))
                 {
-                    var stats = GetChampionStats(person.Key, groupSeason.Text);
+                    var stats = GetChampionStats(person.Key, season.Text);
                     var qualified = stats.Where(x => x.Games >= 3).ToList();
                     string ListStats(IEnumerable<ChampionStat> list, bool winRate) =>
                         string.Join("  /  ", list.Take(3).Select(x => ChampionName(x.ChampionId) + " " +
@@ -1305,24 +1364,23 @@ try {
                     string favorite = ListStats(qualified.OrderByDescending(x => x.Games).ThenByDescending(x => x.Rate), false);
                     string best = ListStats(qualified.OrderByDescending(x => x.Rate).ThenByDescending(x => x.Games), true);
                     string worst = ListStats(qualified.OrderBy(x => x.Rate).ThenByDescending(x => x.Games), true);
-                    var contribution = RecentContributionRanks(person.Key, groupSeason.Text);
+                    var contribution = RecentContributionRanks(person.Key, season.Text);
                     string contributionText = contribution.Count == 0 ? "데이터 없음" :
                         contribution.Average(x => x.Rank).ToString("F2") + "위 (" + contribution.Count + "/20판)";
-                    int idx = groupGrid.Rows.Add(person.Value, stats.Sum(x => x.Games),
+                    int idx = groupGrid.Rows.Add(person.Value, stats.Sum(x => x.Games), Rate(stats.Sum(x => x.Wins), stats.Sum(x => x.Games)),
                         favorite.Length == 0 ? "3판 이상 없음" : favorite,
                         best.Length == 0 ? "3판 이상 없음" : best,
                         worst.Length == 0 ? "3판 이상 없음" : worst, contributionText);
                     groupGrid.Rows[idx].Tag = person.Key;
                 }
             }
-            groupSeason.SelectedIndexChanged += (s, e) => RefreshGroup();
             groupGrid.CellDoubleClick += (s, e) =>
             {
                 if (e.RowIndex < 0) return;
                 if (e.ColumnIndex == groupGrid.Columns["Contribution"].Index)
                 {
                     string selectedId = groupGrid.Rows[e.RowIndex].Tag as string;
-                    var results = RecentContributionRanks(selectedId, groupSeason.Text);
+                    var results = RecentContributionRanks(selectedId, season.Text);
                     string details = results.Count == 0 ? "기여도 지표가 수집된 경기가 없습니다." :
                         string.Join("\r\n", results.Select((x, i) => (i + 1) + ". " +
                             ChampionName(x.ChampionId) + " | 팀 내 " + x.Rank + "위 | " + (x.Win ? "승" : "패") + " | 경기 " + x.GameId));
@@ -1334,19 +1392,23 @@ try {
                 for (int i = 0; i < personalPerson.Items.Count; i++)
                     if ((personalPerson.Items[i] as FriendListItem)?.Puuid == id)
                     { personalPerson.SelectedIndex = i; break; }
-                personalSeason.SelectedItem = groupSeason.SelectedItem;
                 tabs.SelectedTab = personal;
             };
 
             // 챔피언별 전체 플레이 횟수 내림차순, 각 챔피언의 친구 랭킹을 한 행에 표시.
-            ComboBox rankSeason = MakeSeason();
             FlowLayoutPanel rankTop = new FlowLayoutPanel();
+            var rankSearch = new TextBox { Width = 140, PlaceholderText = "챔피언 검색", AccessibleName = "챔피언 검색" };
+            var rankMinimum = new NumericUpDown { Minimum = 1, Maximum = 10000, Width = 65, AccessibleName = "최소 판수" };
+            var rankOrder = new ComboBox { Width = 95, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "정렬" };
+            rankOrder.Items.AddRange(new object[] { "판수순", "승률순" });
+            rankOrder.SelectedIndex = 0;
+            rankTop.Controls.AddRange(new Control[] { rankSearch,
+                new Label { Text = "최소 판수", AutoSize = true, Margin = new Padding(6, 7, 2, 0) }, rankMinimum, rankOrder });
             rankTop.Controls.AddRange(new Control[] {
-                new Label { Text = "시즌", AutoSize = true, Padding = new Padding(0, 7, 0, 0) }, rankSeason,
                 new Label { Text = "챔피언별 총 판수순 | 랭킹은 보정 승률 기준 (1판부터 표시, 1~4판은 표본 부족)",
                     AutoSize = true, Padding = new Padding(12, 7, 0, 0) }
             });
-            DataGridView rankGrid = MakeGrid(("Champion", "챔피언"), ("Games", "전체 판수"),
+            DataGridView rankGrid = MakeGrid(("Champion", "챔피언"), ("Games", "전체 판수"), ("Rate", "전체 승률"),
                 ("First", "1위"), ("Second", "2위"), ("Third", "3위"), ("Others", "그 외 순위"));
             rankGrid.Columns["Champion"].FillWeight = 85;
             rankGrid.Columns["Games"].FillWeight = 55;
@@ -1355,11 +1417,15 @@ try {
             void RefreshRankChampions()
             {
                 rankGrid.Rows.Clear();
-                var all = people.SelectMany(person => GetChampionStats(person.Key, rankSeason.Text)
+                var all = people.SelectMany(person => GetChampionStats(person.Key, season.Text)
                     .Select(st => new { Id = person.Key, Name = person.Value, Stat = st })).ToList();
                 var championsByUsage = all.GroupBy(x => x.Stat.ChampionId)
-                    .Select(g => new { ChampionId = g.Key, Total = g.Sum(x => x.Stat.Games), Entries = g.ToList() })
-                    .OrderByDescending(x => x.Total).ThenBy(x => ChampionName(x.ChampionId));
+                    .Select(g => new { ChampionId = g.Key, Total = g.Sum(x => x.Stat.Games),
+                        Wins = g.Sum(x => x.Stat.Wins), Entries = g.ToList() })
+                    .Where(x => x.Total >= rankMinimum.Value && ChampionName(x.ChampionId)
+                        .Contains(rankSearch.Text.Trim(), StringComparison.CurrentCultureIgnoreCase))
+                    .OrderByDescending(x => rankOrder.SelectedIndex == 1 ? (double)x.Wins / x.Total : x.Total)
+                    .ThenByDescending(x => x.Total).ThenBy(x => ChampionName(x.ChampionId));
                 foreach (var champ in championsByUsage)
                 {
                     var ranked = champ.Entries
@@ -1372,21 +1438,30 @@ try {
                         (ranked[i].Stat.Games < 5 ? ", 표본 부족" : "") + ")";
                     string others = string.Join(" / ", ranked.Skip(3).Select((x, i) =>
                         (i + 4) + "위 " + x.Name + " (" + x.Stat.Games + "판)"));
-                    rankGrid.Rows.Add(ChampionName(champ.ChampionId), champ.Total,
+                    rankGrid.Rows.Add(ChampionName(champ.ChampionId), champ.Total, Rate(champ.Wins, champ.Total),
                         RankLabel(0), RankLabel(1), RankLabel(2), others);
                 }
             }
-            rankSeason.SelectedIndexChanged += (s, e) => RefreshRankChampions();
-            RefreshPersonal(); RefreshGroup(); RefreshRankChampions();
+            rankSearch.TextChanged += (_, _) => RefreshRankChampions();
+            rankMinimum.ValueChanged += (_, _) => RefreshRankChampions();
+            rankOrder.SelectedIndexChanged += (_, _) => RefreshRankChampions();
+            season.SelectedIndexChanged += (_, _) =>
+            {
+                if (embedded) dashboardSeason = season.Text;
+                RefreshPersonal(); RefreshGroup(); RefreshComparison(); RefreshRankChampions();
+            };
+            RefreshPersonal(); RefreshGroup(); RefreshComparison(); RefreshRankChampions();
             if (!string.IsNullOrWhiteSpace(initialPerson))
                 for (int i = 0; i < personalPerson.Items.Count; i++)
                     if ((personalPerson.Items[i] as FriendListItem)?.Puuid == initialPerson)
                     { personalPerson.SelectedIndex = i; break; }
             tabs.SelectedIndex = Math.Max(0, Math.Min(2, initialTab));
-            if (!embedded)
+            if (embedded) tabs.SelectedIndexChanged += (_, _) => dashboardTab = tabs.SelectedIndex;
+            ApplyDashboardTheme(frame);
+            if (dialog != null)
             {
+                ApplyDashboardTheme(dialog);
                 dialog.ShowDialog(this);
-                dialog.Dispose();
             }
         }
 
@@ -2027,6 +2102,7 @@ try {
                 SaveStoredMatches();
                 await LoadChampionNamesAsync();
                 RefreshView();
+                OpenEmbeddedDashboard();
                 lblStatus.Text = "상태: JSON 가져오기 완료";
                 txtResult.Text = "읽은 기록: " + games.GetArrayLength() + "경기\r\n" +
                     "8분 미만 제외: " + skippedShort + "경기\r\n" +

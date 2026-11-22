@@ -13,8 +13,55 @@ public partial class Form1
     private long groupCursor;
     private bool groupSyncRunning;
     private Button groupLoginButton = null!;
-    private Button groupSyncButton = null!;
     private Label groupStatus = null!;
+
+    private sealed record GroupSyncSnapshot(string Message, bool IsRunning, bool CanSync, DateTimeOffset? LastSuccess);
+    private GroupSyncSnapshot GroupSyncState { get; set; } = new("공동 통계 계정으로 로그인해 주세요.", false, false, null);
+    private event EventHandler? GroupSyncStateChanged;
+
+    private void PublishGroupSyncState(string message, bool running = false, bool success = false, bool reset = false)
+    {
+        GroupSyncState = new GroupSyncSnapshot(message, running, groupClient is not null && !running,
+            reset ? null : success ? DateTimeOffset.UtcNow : GroupSyncState.LastSuccess);
+        GroupSyncStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private Control BuildGroupSyncPanel()
+    {
+        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 };
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
+
+        groupStatus = new Label { Dock = DockStyle.Fill, AutoEllipsis = true,
+            TextAlign = ContentAlignment.MiddleLeft, AccessibleName = "클라우드 동기화 상태" };
+        groupLoginButton = new Button { Text = "로그인", Dock = DockStyle.Fill };
+        var sync = new Button { Text = "지금 동기화", Dock = DockStyle.Fill };
+        bar.Controls.Add(groupStatus, 0, 0);
+        bar.Controls.Add(groupLoginButton, 1, 0);
+        bar.Controls.Add(sync, 2, 0);
+        var statusTip = new ToolTip();
+        void RenderState()
+        {
+            var state = GroupSyncState;
+            var last = state.LastSuccess?.ToLocalTime().ToString("MM-dd HH:mm") ?? "—";
+            groupStatus.Text = $"클라우드 · 마지막 성공 {last} · {state.Message}";
+            statusTip.SetToolTip(groupStatus, groupStatus.Text);
+            sync.Enabled = state.CanSync;
+            sync.Text = state.IsRunning ? "동기화 중…" : "지금 동기화";
+        }
+        EventHandler onChanged = (_, _) => RenderState();
+        GroupSyncStateChanged += onChanged;
+        bar.Disposed += (_, _) =>
+        {
+            GroupSyncStateChanged -= onChanged;
+            statusTip.Dispose();
+        };
+        groupLoginButton.Click += async (_, _) => await ToggleGroupLoginAsync();
+        sync.Click += async (_, _) => await SyncGroupAsync();
+        RenderState();
+        return bar;
+    }
     private DataGridView groupMemberGrid = null!;
     private DataGridView groupChampionGrid = null!;
     private DataGridView groupPairGrid = null!;
@@ -22,26 +69,16 @@ public partial class Form1
     private void InitializeGroupSync()
     {
         var tab = new TabPage("공동 통계");
-        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(10) };
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, Padding = new Padding(10) };
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
-        groupLoginButton = new Button { Text = "로그인", AutoSize = true };
-        groupSyncButton = new Button { Text = "지금 동기화", AutoSize = true, Enabled = false };
-        groupStatus = new Label { Text = "공동 통계 계정으로 로그인해 주세요.", AutoSize = true, Margin = new Padding(8) };
-        actions.Controls.AddRange(new Control[] { groupLoginButton, groupSyncButton, groupStatus });
-
         var views = new TabControl { Dock = DockStyle.Fill };
         groupMemberGrid = AddGroupGrid(views, "멤버", "멤버", "경기", "승리", "승률");
         groupChampionGrid = AddGroupGrid(views, "멤버별 챔피언", "멤버", "챔피언", "경기", "승리", "승률", "킬", "데스", "어시스트");
         groupPairGrid = AddGroupGrid(views, "같은 팀 조합", "멤버 1", "멤버 2", "경기", "승리", "승률");
-        content.Controls.Add(actions, 0, 0);
-        content.Controls.Add(views, 0, 1);
+        content.Controls.Add(views, 0, 0);
         tab.Controls.Add(content);
         mainNavigation.TabPages.Add(tab);
 
-        groupLoginButton.Click += async (_, _) => await ToggleGroupLoginAsync();
-        groupSyncButton.Click += async (_, _) => await SyncGroupAsync();
         var timer = new System.Windows.Forms.Timer { Interval = 60000 };
         timer.Tick += async (_, _) => await SyncGroupAsync();
         timer.Start();
@@ -88,7 +125,7 @@ public partial class Form1
             || project.AbsolutePath != "/" || project.Query.Length != 0 || project.Fragment.Length != 0
             || project.UserInfo.Length != 0 || key is null || !key.StartsWith("sb_publishable_", StringComparison.Ordinal))
         {
-            groupStatus.Text = "Supabase 프로젝트 URL과 publishable key를 설정해 주세요.";
+            PublishGroupSyncState("Supabase 프로젝트 URL과 publishable key를 설정해 주세요.");
             return;
         }
 
@@ -111,11 +148,12 @@ public partial class Form1
         fields.Controls.Add(login, 1, 2);
         dialog.Controls.Add(fields);
         dialog.AcceptButton = login;
+        ApplyDashboardTheme(dialog);
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
         var client = new GroupSyncClient(project, key);
         groupLoginButton.Enabled = false;
-        groupStatus.Text = "로그인 중…";
+        PublishGroupSyncState("로그인 중…");
         try
         {
             var signingIn = client.SignInAsync(email.Text.Trim(), password.Text);
@@ -133,7 +171,7 @@ public partial class Form1
         {
             client.Dispose();
             if (!IsDisposed && !Disposing)
-                groupStatus.Text = "공동 통계 로그인 실패. 계정 정보와 서버 연결을 확인해 주세요.";
+                PublishGroupSyncState("공동 통계 로그인 실패. 계정 정보와 서버 연결을 확인해 주세요.");
             return;
         }
         finally
@@ -154,8 +192,7 @@ public partial class Form1
         submittedGroupGames.Clear();
         rejectedGroupGames.Clear();
         groupLoginButton.Text = "로그인";
-        groupSyncButton.Enabled = false;
-        groupStatus.Text = status;
+        PublishGroupSyncState(status, reset: true);
         RenderGroupStats();
     }
 
@@ -166,8 +203,8 @@ public partial class Form1
             return;
 
         groupSyncRunning = true;
-        groupSyncButton.Enabled = groupLoginButton.Enabled = false;
-        groupStatus.Text = "공동 전적 동기화 중…";
+        groupLoginButton.Enabled = false;
+        PublishGroupSyncState("공동 전적 동기화 중…", running: true);
         try
         {
             var roster = await client.GetRosterAsync();
@@ -219,7 +256,7 @@ public partial class Form1
             var waiting = moreRemote || uploadedCandidates > 100 ? " · 다음 동기화에서 계속" : "";
             var accountHint = accountMatches ? "" : " · 등록된 롤 계정 연결 시 업로드";
             var rejected = rejectedGroupGames.Count > 0 ? $" · 충돌 또는 거부 {rejectedGroupGames.Count}판" : "";
-            groupStatus.Text = $"{name} · 멤버 {roster.Members.Length}명 · 멤버 제출 전적 {groupGames.Count}판{waiting}{accountHint}{rejected}";
+            PublishGroupSyncState($"{name} · 멤버 {roster.Members.Length}명 · 멤버 제출 전적 {groupGames.Count}판{waiting}{accountHint}{rejected}", running: true, success: true);
         }
         catch (HttpRequestException ex) when (ex.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
         {
@@ -230,7 +267,7 @@ public partial class Form1
                                                     or ObjectDisposedException)
         {
             if (!IsDisposed && !Disposing)
-                groupStatus.Text = "동기화에 실패했습니다. 다음 주기에 다시 시도합니다.";
+                PublishGroupSyncState("동기화에 실패했습니다. 지금 동기화로 다시 시도할 수 있습니다.", running: true);
         }
         finally
         {
@@ -238,7 +275,7 @@ public partial class Form1
             if (!IsDisposed && !Disposing)
             {
                 groupLoginButton.Enabled = true;
-                groupSyncButton.Enabled = groupClient is not null;
+                if (GroupSyncState.IsRunning) PublishGroupSyncState(GroupSyncState.Message);
             }
         }
     }
